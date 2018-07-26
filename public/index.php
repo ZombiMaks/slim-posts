@@ -1,10 +1,12 @@
 <?php
+
 namespace App;
 
 require __DIR__ . '/../vendor/autoload.php';
+
 use function Stringy\create as s;
 
-$users = Generator::generate(100);
+$repo = new Repository();
 
 $configuration = [
     'settings' => [
@@ -13,47 +15,94 @@ $configuration = [
 ];
 
 $app = new \Slim\App($configuration);
-// Подключение шаблонизатора к слиму. Указываем папку с шаблонами
+
 $container = $app->getContainer();
 $container['renderer'] = new \Slim\Views\PhpRenderer(__DIR__ . '/../templates');
+$container['flash'] = function () {
+    return new \Slim\Flash\Messages();
+};
 
-// Поиск пользователей
-$app->get('/search', function ($request, $response) use ($users){
-    $term = $request->getQueryParam('term', '');
-    $sortedUsers = collect($users)->sortBy('firstName');
-    $userSearch = collect($sortedUsers)->filter(function ($user) use ($term) {
-        return s($user['firstName'])->startsWith($term, false);
-    });
-    $params = [
-        'userSearch' => $userSearch,
-        'term' => $term
-        ];
-    return $this->renderer->render($response, 'users/search.phtml', $params);
+$app->get('/', function ($request, $response) {
+    return $this->renderer->render($response, 'index.phtml');
 });
 
-// Выводит список пользователей
-$app->get('/users', function ($request, $response) use ($users) {
-    $page = $request->getQueryParam('page', 1);
-    $per = $request->getQueryParam('per', 5);
-    $offset = ($page - 1) * $per;
+$app->get('/posts', function ($request, $response) use ($repo) {
+    $flash = $this->flash->getMessages();
 
-    $sliceOfUsers = array_slice($users, $offset, $per);
     $params = [
-        'users' => $sliceOfUsers,
-        'page' => $page
+        'flash' => $flash,
+        'posts' => $repo->all()
     ];
-    return $this->renderer->render($response, 'users/index.phtml', $params);
+    return $this->renderer->render($response, 'posts/index.phtml', $params);
+})->setName('posts');
+
+$app->get('/posts/new', function ($request, $response) use ($repo) {
+    $params = [
+        'posts' => [],
+        'errors' => []
+    ];
+    return $this->renderer->render($response, 'posts/new.phtml', $params);
 });
 
-// Выводит информацию о пользователях
-$app->get('/users/{id}', function ($request, $response, $args) use ($users) {
-    $id = (int) $args['id'];
-    $user = collect($users)->first(function ($user) use ($id) {
-        return $user['id'] == $id;
-    });
-    $params = ['user' => $user];
-    return $this->renderer->render($response, 'users/show.phtml', $params);
+$app->post('/posts', function ($request, $response) use ($repo) {
+    $postData = $request->getParsedBodyParam('post');
+
+    $validator = new Validator();
+    $errors = $validator->validate($postData);
+
+    if (count($errors) === 0) {
+        $repo->save($postData);
+        $this->flash->addMessage('success', 'Post has been created');
+        return $response->withRedirect($this->router->pathFor('posts'));
+    }
+
+    $params = [
+        'postData' => $postData,
+        'errors' => $errors
+    ];
+
+    return $this->renderer->render($response, 'posts/new.phtml', $params);
+});
+
+$app->get('/posts/{id}/edit', function ($request, $response, array $args) use ($repo) {
+    $id = (string) $args['id'];
+    $post = $repo->find($id);
+    $params = [
+        'post' => $post,
+        'postData' => $post
+    ];
+    return $this->renderer->render($response, 'posts/edit.phtml', $params);
+});
+
+$app->patch('/posts/{id}', function ($request, $response, array $args) use ($repo) {
+    $id = (string) $args['id'];
+    $post = $repo->find($id);
+    $postData = $request->getParsedBodyParam('post');
+
+    $validator = new Validator();
+    $errors = $validator->validate($postData);
+
+    if (count($errors) === 0) {
+        $post['name'] = $postData['name'];
+        $post['body'] = $postData['body'];
+        $repo->save($post);
+        $this->flash->addMessage('success', 'Post has been updated');
+        return $response->withRedirect($this->router->pathFor('posts'));
+    }
+
+    $params = [
+        'post' => $post,
+        'postData' => $postData,
+        'errors' => $errors
+    ];
+
+    return $this->renderer->render($response, 'posts/edit.phtml', $params);
+});
+
+$app->delete('/posts/{id}', function ($request, $response, array $args) use ($repo) {
+    $repo->destroy($args['id']);
+    $this->flash->addMessage('success', 'Post has been deleted');
+    return $response->withRedirect($this->router->pathFor('posts'));
 });
 
 $app->run();
-
